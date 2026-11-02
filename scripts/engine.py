@@ -1,22 +1,20 @@
 """Build one narrated lesson page: Kokoro TTS per sentence -> one MP3 -> self-contained HTML.
 
 Usage (from the build folder that holds this script, template.html, lexicon.py and dayN.py):
-    python3 engine.py day3
+    python3 engine.py day3 [--models ~/models]
 
 A lesson module defines DAY, H1, SUB, CSS and SCENES. Each scene is a dict with
 label, cap, show, say, html, js (the body of render(t, D)), and optional hold
 (extra seconds of silence after the narration, e.g. for "pause and think").
 Optional module-level VOICE and SPEED override the defaults below.
 """
-import base64, hashlib, importlib, json, os, re, subprocess, sys
+import argparse, base64, hashlib, importlib, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from lexicon import SPEECH, IPA  # noqa: E402  (course-specific respellings and pronunciations)
 
-MODELS = os.environ.get('KOKORO_DIR', os.path.expanduser('~/models'))
-MODEL = os.path.join(MODELS, 'kokoro-v1.0.onnx')
-VOICES = os.path.join(MODELS, 'voices-v1.0.bin')
+MODELS = os.path.expanduser('~/models')  # override with --models
 LEAD, TAIL, GAP = 0.4, 1.5, 0.3          # seconds before, after each scene; between sentences
 VOICE, SPEED = 'af_heart', 0.95
 
@@ -27,14 +25,9 @@ def speechify(s):
     return s
 
 
-def run(cmd):
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def probe(path):
-    out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path],
-                         capture_output=True, text=True).stdout.strip()
-    return float(out)
+def mp3_seconds(path):
+    import soundfile as sf
+    return sf.info(path).duration
 
 
 _IPAT = re.compile(r"\b(" + '|'.join(sorted(map(re.escape, IPA), key=len, reverse=True)) + r")\b('s)?") if IPA else None
@@ -59,12 +52,14 @@ def sentences(text):
     return [x for x in re.split(r'(?<=[.!?])\s+', text.strip()) if x]
 
 
-def make_audio(day, scenes, outdir, voice, speed):
+def make_audio(day, scenes, outdir, voice, speed, models):
+    """Synthesize sentence by sentence and stitch everything in memory: no external programs are run."""
     import numpy as np, soundfile as sf
     from kokoro_onnx import Kokoro
-    k = Kokoro(MODEL, VOICES)
+    k = Kokoro(os.path.join(models, 'kokoro-v1.0.onnx'), os.path.join(models, 'voices-v1.0.bin'))
     cache = os.path.join(outdir, 'cache')
     os.makedirs(cache, exist_ok=True)
+    SR = 24000
 
     def synth(sent):
         key = hashlib.sha1(f'v2|{voice}|{speed}|{sent}'.encode()).hexdigest()[:16]
@@ -72,41 +67,37 @@ def make_audio(day, scenes, outdir, voice, speed):
         if not os.path.exists(p):
             a, sr = k.create(to_phonemes(k, speechify(sent)), voice=voice, speed=speed, is_phonemes=True)
             sf.write(p, a, sr)
-        return sf.read(p, dtype='float32')
+        a, sr = sf.read(p, dtype='float32')
+        assert sr == SR, sr
+        return a
 
     clips, durs, reveals = [], [], []
     for i, sc in enumerate(scenes):
-        parts, sr = [], 24000
+        parts = []
         sents = sentences(sc['say'])
         for j, sent in enumerate(sents):
-            a, sr = synth(sent)
-            parts.append(a)
+            parts.append(synth(sent))
             if j < len(sents) - 1:
-                parts.append(np.zeros(int(GAP * sr), dtype='float32'))
+                parts.append(np.zeros(int(GAP * SR), dtype='float32'))
         audio = np.concatenate(parts)
-        raw = os.path.join(outdir, f'raw{i:02d}.wav')
-        sf.write(raw, audio, sr)
-        alen = len(audio) / sr
+        alen = len(audio) / SR
         dur = round(LEAD + alen + TAIL + sc.get('hold', 0), 2)
-        clip = os.path.join(outdir, f'clip{i:02d}.wav')
-        run(['ffmpeg', '-y', '-i', raw, '-af', f'adelay={int(LEAD * 1000)}:all=1,apad,atrim=0:{dur:.2f}',
-             '-ac', '1', '-ar', '24000', clip])
+        clip = np.zeros(int(round(dur * SR)), dtype='float32')
+        start = int(LEAD * SR)
+        clip[start:start + len(audio)] = audio[:len(clip) - start]
         clips.append(clip); durs.append(dur); reveals.append(round(LEAD + alen, 2))
         print(f'  scene {i + 1}: audio {alen:.2f}s -> {dur:.2f}s', flush=True)
-    lst = os.path.join(outdir, 'list.txt')
-    with open(lst, 'w') as f:
-        f.writelines(f"file '{c}'\n" for c in clips)
     mp3 = os.path.join(outdir, f'day{day}.mp3')
-    run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', lst, '-ac', '1', '-c:a', 'libmp3lame', '-b:a', '64k', mp3])
+    sf.write(mp3, np.concatenate(clips), SR, format='MP3', subtype='MPEG_LAYER_III')
     return mp3, durs, reveals
 
 
-def build(d):
+def build(d, models=MODELS):
     root = os.getcwd()
     outdir = os.path.join(root, f'v2out{d.DAY}')
     os.makedirs(outdir, exist_ok=True)
-    mp3, durs, reveals = make_audio(d.DAY, d.SCENES, outdir, getattr(d, 'VOICE', VOICE), getattr(d, 'SPEED', SPEED))
-    total, mlen = sum(durs), probe(mp3)
+    mp3, durs, reveals = make_audio(d.DAY, d.SCENES, outdir, getattr(d, 'VOICE', VOICE), getattr(d, 'SPEED', SPEED), models)
+    total, mlen = sum(durs), mp3_seconds(mp3)
     words = sum(len(s['say'].split()) for s in d.SCENES)
     print(f'Day {d.DAY}: scene sum {total:.2f}s, mp3 {mlen:.2f}s, diff {mlen - total:+.3f}s, words {words}, '
           f'length {int(total // 60)}:{int(total % 60):02d}')
@@ -130,5 +121,9 @@ def build(d):
 
 
 if __name__ == '__main__':
+    ap = argparse.ArgumentParser(description='Build one narrated lesson page.')
+    ap.add_argument('lesson', help='lesson module name in the current folder, e.g. day3')
+    ap.add_argument('--models', default=MODELS, help='folder holding kokoro-v1.0.onnx and voices-v1.0.bin')
+    args = ap.parse_args()
     sys.path.insert(0, os.getcwd())
-    build(importlib.import_module(sys.argv[1]))
+    build(importlib.import_module(args.lesson), args.models)

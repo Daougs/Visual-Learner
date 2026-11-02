@@ -1,11 +1,16 @@
-// Record an explainer page to MP4: node record.js dayN.html out.mp4 narration.mp3
+// Record an explainer page to MP4: node record.js dayN.html out.mp4 narration.mp3 [--max=seconds] [--chrome=path]
+// It runs exactly two local programs, with fixed arguments and no shell: ffprobe (to measure the screencast)
+// and ffmpeg (to encode it with the narration). It makes no network requests and reads no secrets.
 // The page's capture mode drives the timeline by wall clock; Playwright records the screen; ffmpeg adds the MP3.
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
-// Browser: $CHROME if set, else a preinstalled /opt/pw-browsers/chromium if present, else Playwright's own download
-const launchOpts = () => { const p = process.env.CHROME || '/opt/pw-browsers/chromium'; return require('fs').existsSync(p) ? { executablePath: p } : {}; };
+// Options come from the command line only: --chrome=/path/to/chrome (default: /opt/pw-browsers/chromium if present, else Playwright's own browser)
+const ARGS = process.argv.slice(2);
+const flag = (name) => { const a = ARGS.find(x => x.startsWith('--' + name + '=')); return a ? a.slice(name.length + 3) : undefined; };
+const POS = ARGS.filter(x => !x.startsWith('--'));
+const launchOpts = () => { const p = flag('chrome') || '/opt/pw-browsers/chromium'; return fs.existsSync(p) ? { executablePath: p } : {}; };
 (async () => {
-  const [src, out, mp3] = process.argv.slice(2);
+  const [src, out, mp3] = POS;
   const tmp = fs.mkdtempSync('/tmp/rec-');
   // Google Fonts may be unreachable from the recorder, so load the same faces from local @fontsource files
   const nm = path.join(__dirname, 'node_modules');
@@ -29,7 +34,7 @@ const launchOpts = () => { const p = process.env.CHROME || '/opt/pw-browsers/chr
   await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(800);
   const offset = (Date.now() - t0) / 1000;
   let total = await page.evaluate(() => window.__capture());
-  if (process.env.MAXT) { total = Math.min(total, +process.env.MAXT); await page.waitForTimeout(total * 1000); }
+  if (flag('max')) { total = Math.min(total, +flag('max')); await page.waitForTimeout(total * 1000); }
   else await page.waitForFunction(() => window.__done === true, null, { timeout: (total + 60) * 1000, polling: 500 });
   await page.waitForTimeout(400);
   const vid = await page.video().path();

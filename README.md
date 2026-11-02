@@ -38,7 +38,7 @@ Then ask: *"Make me a course on <topic>."*
 
 ## Requirements for video builds
 
-Python 3 with `kokoro-onnx`, `soundfile`, `numpy`; ffmpeg/ffprobe; Node.js with Playwright and Chromium. The setup block is in `references/video-production.md`. Scheduling needs Claude's scheduled tasks; the course book uses Claude Docs.
+Python 3 with `kokoro-onnx`, `soundfile`, `numpy`; ffmpeg/ffprobe (for MP4 recording); Node.js with Playwright and Chromium. The setup block, with pinned versions and model checksums, is in `references/video-production.md`. See `SECURITY.md` for exactly what each script runs. Scheduling needs Claude's scheduled tasks; the course book uses Claude Docs.
 
 ## Repository layout
 
@@ -51,6 +51,7 @@ references/
   video-production.md        lesson file format, build/check/record commands
   scheduling.md              scheduled-task setup and the standalone run prompt
   quality-checklist.md       per-lesson checklist
+SECURITY.md                  what each script runs and doesn't
 scripts/
   engine.py                  narration (Kokoro) + page builder
   template.html              the animated player page

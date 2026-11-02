@@ -2,11 +2,14 @@
 const { chromium } = require('playwright');
 const fs = require('fs'), os = require('os'), path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'chk-'));
-// Browser: $CHROME if set, else a preinstalled /opt/pw-browsers/chromium if present, else Playwright's own download
-const launchOpts = () => { const p = process.env.CHROME || '/opt/pw-browsers/chromium'; return require('fs').existsSync(p) ? { executablePath: p } : {}; };
+// Options come from the command line only: --chrome=/path/to/chrome (default: /opt/pw-browsers/chromium if present, else Playwright's own browser)
+const ARGS = process.argv.slice(2);
+const flag = (name) => { const a = ARGS.find(x => x.startsWith('--' + name + '=')); return a ? a.slice(name.length + 3) : undefined; };
+const POS = ARGS.filter(x => !x.startsWith('--'));
+const launchOpts = () => { const p = flag('chrome') || '/opt/pw-browsers/chromium'; return fs.existsSync(p) ? { executablePath: p } : {}; };
 (async () => {
   fs.mkdirSync('shots', { recursive: true });
-  const day = process.argv[2];
+  const day = POS[0];
   const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>' + fs.readFileSync(`day${day}.html`, 'utf8') + '</body></html>';
   fs.writeFileSync(path.join(TMP, `t${day}.html`), html);
   const browser = await chromium.launch(launchOpts());
