@@ -1,9 +1,0 @@
-node_modules/
-__pycache__/
-*.pyc
-v2out*/
-shots/
-mp4/
-*.mp3
-*.mp4
-models/
